@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 # --- Parameters ---
-grid_size = 30  # 30x30 grid
+grid_size = 20  # 20x20 grid
 P_min, P_max = 7.0, 15.0
 R_max = 1.0
 kappa = 0.5  # Return curve shape parameter (toggle)
@@ -14,6 +15,7 @@ Amp = 0
 Freq = 0.01
 Mag = 0
 Mag_Linear = 10
+
 np.random.seed(42)
 
 # --- Cost function ---
@@ -30,6 +32,7 @@ def cost_function(t):
 P = np.random.uniform(P_min, P_max, size=(grid_size, grid_size))
 P_history = [P.copy()]
 avg_price_history = [P.mean()]
+std_price_history = [P.std()]
 cost_history = [cost_function(0)]
 high_price_history = [P.max()]
 low_price_history = [P.min()]
@@ -48,60 +51,63 @@ def get_neighbors(P, i, j):
     return np.array(neighbors)
 
 # --- Simulation loop (asynchronous update) ---
+frames = []
 for t in range(1, timesteps + 1):
     C = cost_function(t)
     cost_history.append(C)
-    # Flatten grid indices and shuffle for random update order
     indices = [(i, j) for i in range(grid_size) for j in range(grid_size)]
     np.random.shuffle(indices)
     for i, j in indices:
         P_ij = P[i, j]
         neighbors = get_neighbors(P, i, j)
-        # 1. Return and value
         R_P = R_max * (1 - np.exp(-kappa * (P_ij - P_min)))
         V_P = R_P / P_ij
-        # 2. Derivative of value
         R_prime = R_max * kappa * np.exp(-kappa * (P_ij - P_min))
         dVdP = (R_prime * P_ij - R_P) / (P_ij ** 2)
-        # 3. Fitness gradient
         imitation_penalty = np.sum(2 * J * (P_ij - neighbors))
-        P_target = P.mean()  # or set to a fixed value if you want
+        P_target = P.mean()
         external_field = 2 * h * (P_ij - P_target)
         grad = dVdP * (P_ij - C) + V_P - imitation_penalty - external_field
-        # 4. Update with mutation
         dP = 0.1 * grad + mutation_noise * np.random.randn()
-        # 5. Clamp to allowed range
         P[i, j] = np.clip(P_ij + dP, P_min, P_max)
-        # 6. Death and new entrant: if profit margin < 0, replace with new random price
         if P[i, j] - C < 0:
             P[i, j] = np.random.uniform(P_min, P_max)
     P_history.append(P.copy())
     avg_price_history.append(P.mean())
+    std_price_history.append(P.std())
     high_price_history.append(P.max())
     low_price_history.append(P.min())
+    frames.append(P.copy())
 
-# --- Visualization ---
-P_history = np.array(P_history)
-plt.figure(figsize=(16, 10))
+# --- Animation with subplot for average price and cost ---
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6), gridspec_kw={'width_ratios': [1, 1.2]})
+cax = ax1.imshow(frames[0], cmap='plasma', vmin=P_min, vmax=P_max)
+cbar = fig.colorbar(cax, ax=ax1, label='Price')
+title = ax1.set_title('Prices at t=0')
+ax1.axis('off')
 
-# Show heatmaps at selected times
-times_to_show = [0, timesteps//4, timesteps//2, 3*timesteps//4, timesteps]
-for idx, t_show in enumerate(times_to_show):
-    plt.subplot(2, 3, idx+1)
-    plt.imshow(P_history[t_show], cmap='plasma', vmin=P_min, vmax=P_max)
-    plt.title(f'Prices at t={t_show}')
-    plt.colorbar(label='Price')
-    plt.axis('off')
+line_price, = ax2.plot([], [], label='Average Price', color='blue')
+line_cost, = ax2.plot([], [], label='Cost', color='red', linestyle='--')
+line_high, = ax2.plot([], [], label='Highest Price', color='green', linestyle=':')
+line_low, = ax2.plot([], [], label='Lowest Price', color='purple', linestyle=':')
+ax2.set_xlim(0, timesteps)
+ax2.set_ylim(min(P_min, min(cost_history)), max(P_max, max(cost_history)))
+ax2.set_xlabel('Time')
+ax2.set_ylabel('RM')
+ax2.legend()
+ax2.set_title('Average, High, Low Price and Cost vs Time')
 
-# Plot average, high, low price and cost over time
-plt.subplot(2, 3, 6)
-plt.plot(avg_price_history, label='Average Price', color='blue')
-plt.plot(cost_history, label='Cost', color='red', linestyle='--')
-plt.plot(high_price_history, label='Highest Price', color='green', linestyle=':')
-plt.plot(low_price_history, label='Lowest Price', color='purple', linestyle=':')
-plt.xlabel('Time')
-plt.ylabel('RM')
-plt.legend()
-plt.title('Average, High, Low Price and Cost vs Time')
+
+def update(frame_idx):
+    cax.set_data(frames[frame_idx])
+    title.set_text(f'Prices at t={frame_idx}')
+    line_price.set_data(np.arange(frame_idx+1), avg_price_history[:frame_idx+1])
+    line_cost.set_data(np.arange(frame_idx+1), cost_history[:frame_idx+1])
+    line_high.set_data(np.arange(frame_idx+1), high_price_history[:frame_idx+1])
+    line_low.set_data(np.arange(frame_idx+1), low_price_history[:frame_idx+1])
+    return cax, title, line_price, line_cost, line_high, line_low
+
+ani = animation.FuncAnimation(fig, update, frames=len(frames), interval=60, blit=False)
 plt.tight_layout()
 plt.show()
+# To save: ani.save('hawker_ising_anim.mp4', fps=20) 
