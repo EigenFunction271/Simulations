@@ -3,25 +3,29 @@ import matplotlib.pyplot as plt
 from scipy.special import expit  # Sigmoid function
 
 # --- Parameters ---
-n_strategies = 750
-P_min, P_max = 7.0, 20.0  # Initial price range
+n_strategies = 100
+P_min, P_max = 7.0, 25.0  # Initial price range
 prices = np.linspace(P_min, P_max, n_strategies)
-lambda_competition = 5
 R = 1.0  # Total demand
-timesteps = 300
-epsilon_noise = 0.1 #controls the magnitude of random fluctuations in the population share of each strategy
+factor = 1
+segments = [
+    {"weight": 0.5, "lambda": 6*factor},  # Budget buyers
+    {"weight": 0.35, "lambda": 1*factor},  # Quality seekers
+    {"weight": 0.15, "lambda": 0.3*factor},  # Loyal locals
+]
+timesteps = 200
+epsilon_noise = 0.25 #controls the magnitude of random fluctuations in the population share of each strategy.
 min_profit_margin = 0.5  # Minimum profit margin above cost
 survival_threshold = -0.1  # Fitness threshold for survival
-entry_rate = 0.05  # Probability of new strategy entry per timestep
-max_strategies = n_strategies*1.5 # Maximum number of strategies allowed
+entry_rate = 0.07  # Probability of new strategy entry per timestep
+max_strategies = n_strategies*1.25  # Maximum number of strategies allowed
 Amp = 1
 Freq = 0.05
 Mag = 5
 
 # Time-varying cost function
 def base_cost_function(t, base_cost=6.5, amplitude=Amp, frequency=Freq):
-    return base_cost + amplitude * np.sin(2 * np.pi * frequency * t) #+ min(t, 400)*0.03
-    #return base_cost + t * 0.01
+    return base_cost + amplitude * np.sin(2 * np.pi * frequency * t)
 
 def shock(t, start=100, magnitude=Mag, duration=10):
     return magnitude if start <= t < start + duration else 0.0
@@ -47,41 +51,36 @@ for t in range(1, timesteps + 1):
     # Enforce minimum price constraint
     below_min = prices < min_viable_price
     if np.any(below_min):
-        # Adjust prices below minimum to the minimum viable price
         prices[below_min] = min_viable_price
     
     P_bar = np.sum(x * prices)
     
-    # Demand share based on logistic response
-    demand = expit(-lambda_competition * (prices - P_bar)) * R
-    
-    # Fitness = demand * profit margin
-    profit = demand * (prices - C)
+    # --- Updated profit calculation: sum over segments ---
+    profit = np.zeros_like(prices)
+    for seg in segments:
+        demand_k = expit(-seg["lambda"] * (prices - P_bar)) * R
+        profit += seg["weight"] * demand_k * (prices - C)
     avg_profit = np.sum(x * profit)
     
     # Survival check - remove strategies below threshold
     surviving = profit >= survival_threshold
     if not np.all(surviving):
-        # Remove strategies below threshold
         x[~surviving] = 0
         if np.sum(x) > 0:
-            x /= np.sum(x)  # Renormalize remaining strategies
+            x /= np.sum(x)
     
     # Entry of new strategies
     if np.random.random() < entry_rate and len(prices) < max_strategies:
-        # Generate new strategy
         new_price = np.random.uniform(P_min, P_max)
-        new_share = 0.01  # Small initial share
-        
-        # Add new strategy
+        new_share = 0.01
         prices = np.append(prices, new_price)
         x = np.append(x, new_share)
-        x /= np.sum(x)  # Renormalize
-        
-        # Recalculate demand and profit for the new strategy
+        x /= np.sum(x)
         P_bar = np.sum(x * prices)
-        demand = expit(-lambda_competition * (prices - P_bar)) * R
-        profit = demand * (prices - C)
+        profit = np.zeros_like(prices)
+        for seg in segments:
+            demand_k = expit(-seg["lambda"] * (prices - P_bar)) * R
+            profit += seg["weight"] * demand_k * (prices - C)
         avg_profit = np.sum(x * profit)
     
     # Replicator dynamics with mutation
@@ -97,17 +96,14 @@ for t in range(1, timesteps + 1):
     max_adjustment = 0.2
     price_adjustment = np.clip(price_adjustment, -max_adjustment, max_adjustment)
     prices += price_adjustment
-    
-    # Ensure prices remain within reasonable bounds and above minimum
     prices = np.maximum(prices, min_viable_price)
     
     # Store history
     x_history.append(x.copy())
     price_history.append(np.sum(x * prices))
-    active_strategies_history.append(np.sum(x > 0.001))  # Count strategies with non-negligible share
+    active_strategies_history.append(np.sum(x > 0.001))
 
 # Convert history to arrays
-# Pad x_history to max_strategies length
 max_len = max(len(x_array) for x_array in x_history)
 padded_x_history = []
 for x_array in x_history:
@@ -124,9 +120,7 @@ active_strategies_history = np.array(active_strategies_history)
 # Plot results
 plt.figure(figsize=(14, 12))
 
-# Strategy distribution heatmap
 plt.subplot(2, 1, 1)
-# Adjust the extent to account for variable number of strategies
 plt.imshow(x_history.T, aspect='auto', cmap='plasma', 
            extent=[0, timesteps, min(prices), max(prices)])
 plt.colorbar(label='Population Share')
@@ -135,7 +129,6 @@ plt.ylabel('Price Strategy (RM)')
 plt.title('Strategy Distribution Over Time')
 plt.grid(alpha=0.3)
 
-# Average price vs time with cost overlay
 plt.subplot(2, 1, 2)
 plt.plot(price_history, label='Average Price', color='blue')
 plt.plot(cost_history, label='Cost', color='red', linestyle='--')
@@ -147,20 +140,9 @@ plt.title('Average Price and Cost Over Time')
 plt.legend()
 plt.grid(alpha=0.3)
 
-'''
-# Active strategies plot
-plt.subplot(3, 1, 3)
-plt.plot(active_strategies_history, label='Active Strategies', color='green')
-plt.xlabel('Time')
-plt.ylabel('Number of Strategies')
-plt.title('Number of Active Strategies Over Time')
-plt.grid(alpha=0.3)
-'''
-
-plt.tight_layout(pad=3.0)  # Increased padding between subplots
+plt.tight_layout(pad=3.0)
 plt.show()
 
-# Print some statistics at the end
 final_avg_price = price_history[-1]
 final_cost = cost_history[-1]
 final_margin = final_avg_price - final_cost
@@ -171,4 +153,4 @@ print(f"Final Statistics:")
 print(f"Average Price: RM {final_avg_price:.2f}")
 print(f"Cost: RM {final_cost:.2f}")
 print(f"Profit Margin: RM {final_margin:.2f} ({final_margin_pct:.1f}%)")
-print(f"Active Strategies: {final_active_strategies}")
+print(f"Active Strategies: {final_active_strategies}") 
