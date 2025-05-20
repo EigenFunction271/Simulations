@@ -14,6 +14,7 @@ Amp = 0
 Freq = 0.01
 Mag = 0
 Mag_Linear = 10
+margin_floor = 1.0
 np.random.seed(42)
 
 # --- Cost function ---
@@ -74,7 +75,8 @@ for t in range(1, timesteps + 1):
         P[i, j] = np.clip(P_ij + dP, P_min, P_max)
         # 6. Death and new entrant: if profit margin < 0, replace with new random price
         if P[i, j] - C < 0:
-            P[i, j] = np.random.uniform(P_min, P_max)
+            P[i, j] = np.random.uniform(C + margin_floor, P_max)
+
     P_history.append(P.copy())
     avg_price_history.append(P.mean())
     high_price_history.append(P.max())
