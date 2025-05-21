@@ -6,10 +6,10 @@ import matplotlib.animation as animation
 grid_size = 40  # 40x40 grid
 P_min, P_max = 7.0, 20.0
 base_cost = 6.5
-amp = 0.5
+amp = 0.1
 freq = 0.03
-linear_slope = 0.1
-shock_magnitude = 0.0
+linear_slope = 0.05
+shock_magnitude = 3.0
 shock_start = 120
 shock_duration = 8
 
@@ -26,11 +26,12 @@ np.random.seed(42)
 # --- Cost function ---
 def shock(t, start=shock_start, magnitude=shock_magnitude, duration=shock_duration):
     return magnitude if start <= t < start + duration else 0.0
-
+def linear_cost(t):
+    return linear_slope * t if t < 100 else linear_slope * (100)
 def cost_function(t):
     return (base_cost
             + amp * np.sin(2 * np.pi * freq * t)
-            + linear_slope * t
+            + linear_cost(t)
             + shock(t))
 
 # --- Initialization ---
