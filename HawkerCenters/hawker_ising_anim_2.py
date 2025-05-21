@@ -3,18 +3,18 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 # --- Parameters ---
-grid_size = 20  # 20x20 grid
+grid_size = 40  # 20x20 grid
 P_min, P_max = 7.0, 15.0
 R_max = 1.0
 kappa = 0.5  # Return curve shape parameter (toggle)
-J = 0.8      # Ising coupling strength (toggle)
+J = 0.9     # Ising coupling strength (toggle)
 mutation_noise = 0.2  # Mutation noise (toggle)
 h = 0.0  # External field (toggle), tunes towards global average
 timesteps = 200
 Amp = 0
 Freq = 0.01
 Mag = 0
-Mag_Linear = 10
+Mag_Linear = 3
 
 np.random.seed(42)
 
@@ -24,7 +24,7 @@ def base_cost_function(t, base_cost=6.5, amplitude=Amp, frequency=Freq):
 def shock(t, start=100, magnitude=Mag, duration=10):
     return magnitude if start <= t < start + duration else 0.0
 def linear_cost_function(t, start=0, magnitude=Mag_Linear, duration=100):
-    return magnitude * (t - start) / duration if start <= t < start + duration else 0.0
+    return magnitude * (t - start) / duration if start <= t < start + duration else magnitude
 def cost_function(t):
     return base_cost_function(t) + linear_cost_function(t)
 
