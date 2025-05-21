@@ -5,35 +5,51 @@ from matplotlib import gridspec
 
 # --- Parameters ---
 grid_size = 40  # 40x40 grid
-P_min, P_max = 7.0, 20.0
+P_min, P_max = 7.0, 17.0
 base_cost = 6.5
-amp = 0.1
+amp = 0.0
 freq = 0.03
-linear_slope = 0.1
-shock_magnitude = 0.0
+linear_slope = 0.07
+default_shock_magnitude = 5.0 # Use this for the targeted shock
 shock_start = 120
-shock_duration = 8
+shock_duration = 2
+shock_fraction = 0.15 # Fraction of cells to shock
 
 price_jump = 2.0
 stress_transfer = 0.5 * price_jump
-imitation_rate = 0.08
+imitation_rate = 0.05
 mutation_strength = 0.03
 min_margin = 0.5
 threshold = 3.0  # constant for all stalls
-timesteps = 500
+timesteps = 250
 
 np.random.seed(42)
 
 # --- Cost function ---
-def shock(t, start=shock_start, magnitude=shock_magnitude, duration=shock_duration):
-    return magnitude if start <= t < start + duration else 0.0
 def linear_cost(t):
-    return linear_slope * t if t < 100 else linear_slope * (100)
+    return linear_slope * t if t < 70 else linear_slope * (70)
 def cost_function(t):
     return (base_cost
             + amp * np.sin(2 * np.pi * freq * t)
-            + linear_cost(t)
-            + shock(t))
+            + linear_cost(t))
+
+def targeted_shock_mask(grid_size, fraction):
+    mask = np.zeros((grid_size, grid_size), dtype=bool)
+    num_cells = grid_size * grid_size
+    num_shock = int(num_cells * fraction)
+    indices = np.arange(num_cells)
+    np.random.shuffle(indices)
+    shock_indices = indices[:num_shock]
+    mask.flat[shock_indices] = True
+    return mask
+
+shock_mask = targeted_shock_mask(grid_size, shock_fraction)
+
+def targeted_shock(t, mask, start=shock_start, magnitude=default_shock_magnitude, duration=shock_duration):
+    if start <= t < start + duration:
+        return magnitude * mask
+    else:
+        return np.zeros_like(mask, dtype=float)
 
 # --- Initialization ---
 P = np.random.uniform(P_min, P_max, size=(grid_size, grid_size))
@@ -56,8 +72,9 @@ def get_neighbors(i, j, n):
 
 # --- Simulation loop ---
 for t in range(timesteps):
-    C = cost_function(t)
-    cost_history.append(C)
+    base_C = cost_function(t)
+    C = base_C + targeted_shock(t, shock_mask)
+    cost_history.append(base_C)  # For plotting, keep the base cost
     avalanche_size = 0
     topple_mask = np.zeros_like(S, dtype=bool)
 
