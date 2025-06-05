@@ -6,23 +6,33 @@ from matplotlib import gridspec
 # --- Parameters ---
 grid_size = 40  # 40x40 grid
 P_min, P_max = 7.0, 17.0
-base_cost = 6.5
+base_cost = 6.0
 amp = 0.0
 freq = 0.03
-linear_slope = 0.07
-default_shock_magnitude = 5.0 # Use this for the targeted shock
+linear_slope = 0.05
+shock_magnitude = 1.0
 shock_start = 120
-shock_duration = 2
-shock_fraction = 0.15 # Fraction of cells to shock
+shock_duration = 5
+
+default_shock_magnitude = 4.5  # Use this for the targeted shock
+shock_fraction = 0.1  # Fraction of cells to shock (for reference)
 
 price_jump = 2.0
 stress_transfer = 0.5 * price_jump
 imitation_rate = 0.05
-mutation_strength = 0.03
+mutation_strength = 0.13
 min_margin = 0.5
 threshold = 3.0  # constant for all stalls
-timesteps = 250
+timesteps = 350
 
+# --- New constants for overpricing penalty and upward pressure ---
+beta_overprice = 0.15
+margin_slack = 2.0
+gamma_align = 0.35
+max_push = 0.5
+
+
+num_patches = 4
 np.random.seed(42)
 
 # --- Cost function ---
@@ -33,17 +43,20 @@ def cost_function(t):
             + amp * np.sin(2 * np.pi * freq * t)
             + linear_cost(t))
 
-def targeted_shock_mask(grid_size, fraction):
+def random_patches_mask(grid_size, num_patches, patch_size):
     mask = np.zeros((grid_size, grid_size), dtype=bool)
-    num_cells = grid_size * grid_size
-    num_shock = int(num_cells * fraction)
-    indices = np.arange(num_cells)
-    np.random.shuffle(indices)
-    shock_indices = indices[:num_shock]
-    mask.flat[shock_indices] = True
+    for _ in range(num_patches):
+        i = np.random.randint(0, grid_size - patch_size + 1)
+        j = np.random.randint(0, grid_size - patch_size + 1)
+        mask[i:i+patch_size, j:j+patch_size] = True
     return mask
 
-shock_mask = targeted_shock_mask(grid_size, shock_fraction)
+# Calculate patch size: previous patch size ~ sqrt(grid_size*grid_size*shock_fraction)
+prev_patch_area = int(grid_size * grid_size * shock_fraction)
+prev_patch_size = int(np.sqrt(prev_patch_area))
+patch_size = max(1, int(prev_patch_size / 3))  # 1/3 the previous patch size, at least 1
+
+shock_mask = random_patches_mask(grid_size, num_patches, patch_size)
 
 def targeted_shock(t, mask, start=shock_start, magnitude=default_shock_magnitude, duration=shock_duration):
     if start <= t < start + duration:
@@ -78,8 +91,10 @@ for t in range(timesteps):
     avalanche_size = 0
     topple_mask = np.zeros_like(S, dtype=bool)
 
-    # 1. Accumulate stress
+    # 1. Accumulate stress (underpricing)
     S += np.maximum(0, C - P)
+    # 1b. Accumulate stress (overpricing)
+    S += beta_overprice * np.maximum(0, P - (C + margin_slack))
 
     # 2. Toppling (cascades)
     to_check = list(zip(*np.where(S >= T)))
@@ -88,7 +103,10 @@ for t in range(timesteps):
         for i, j in to_check:
             if S[i, j] >= T[i, j]:
                 avalanche_size += 1
-                P[i, j] += price_jump
+                if P[i, j] > C[i, j] + margin_slack:
+                    P[i, j] -= price_jump  # downward jump for overpriced
+                else:
+                    P[i, j] += price_jump  # upward jump for underpriced/normal
                 S[i, j] = 0
                 topple_mask[i, j] = True
                 for ni, nj in get_neighbors(i, j, grid_size):
@@ -100,6 +118,10 @@ for t in range(timesteps):
     cumulative_avalanche_count += avalanche_size
     avalanche_size_history.append(avalanche_size)
     cumulative_avalanche_history.append(cumulative_avalanche_count)
+
+    # 2b. Soft upward pressure during cost increases
+    P += gamma_align * np.clip(C - P, 0, max_push)
+
 
     # 3. Ising alignment
     P_new = P.copy()
