@@ -9,19 +9,25 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 # --- Model Parameters (Typical Human-Derived Values) ---
 # These parameters are based on the Kronauer/Jewett, Forger, Kronauer (JFK) 1999 model.
-tau_x0 = 24.2    # Intrinsic period of the SCN oscillator (hours)
-mu = 0.13        # Stiffness parameter of the van der Pol oscillator, affecting limit cycle shape
+tau_x0 = 12 #24.2    # Intrinsic period of the SCN oscillator (hours)
+mu = 0.02        # Stiffness parameter of the van der Pol oscillator, affecting limit cycle shape
 k_B = 0.0035     # Parameter influencing the amplitude and stability of xc
 lambda_n = 60 #0.013 # Rate constant for the dynamics of light adaptation state n
 beta_n = 0.0075  # Rate constant for the decay of light adaptation state n
-G = 33.0         # Gain factor for the circadian light stimulus B(t)
-b_x = 0.02       # Coefficient for the gating of light input by state variable x
-b_xc = 0.05      # Coefficient for the gating of light input by state variable xc
+G = 19.875 #33.0         # Gain factor for the circadian light stimulus B(t)
+b_x = 0.04       # Coefficient for the gating of light input by state variable x
+b_xc = 0.04      # Coefficient for the gating of light input by state variable xc
 alpha_0_val = 0.05 # Baseline effective photic input rate
 I_0 = 9500.0      # Threshold light intensity for photic input saturation (lux)
 q_factor = 0.99669 # Period correction factor used in the xc dynamics
 q = 1.0          # Fixed q value
 stabilisation = 10
+# Parameters for S(t) homeostatic sleep drive
+r_w = 0.2      # Rate constant for increase of S during wake
+r_s = 0.3      # Rate constant for decrease of S during sleep
+S_max = 15.0    # Maximum value of S
+S_init = S_max / 2  # Start at midpoint, for example
+
 # --- Helper Functions ---
 
 def format_time_label(x, pos):
@@ -82,6 +88,14 @@ def effective_photic_input(L_val, alpha_0_param, I_0_param):
         p = 0.45 # Compressive response above I_0 (saturation effect)
     return alpha_0_param * (ratio ** p)
 
+# Calculate phase shift so that the last day starts at the end of sleep (minimum S)
+last_day_start = (stabilisation + 3 - 1) * 24  # (total_days - 1) * 24
+phase_shift = (6.0 - (last_day_start % 24.0)) % 24.0
+
+def A_func(t, phase_shift=0.0):
+    t_in_day = (t + phase_shift) % 24.0
+    return 1 if 6.0 <= t_in_day < 22.0 else 0
+
 # --- ODE System Definition (SCN Model) ---
 
 def scn_model(Y, t, *params):
@@ -99,13 +113,14 @@ def scn_model(Y, t, *params):
     Defines the system of Ordinary Differential Equations (ODEs) for the SCN model.
     Args:
         t (float): Current time (hours).
-        Y (list or np.array): Array of current state variable values [x, xc, n].
+        Y (list or np.array): Array of current state variable values [x, xc, n, S].
         t (float): Current time (hours).
         params (tuple): Tuple of model parameters.
     Returns:
-        list: List of derivatives [dx/dt, dxc/dt, dn/dt].
+        list: List of derivatives [dx/dt, dxc/dt, dn/dt, dS/dt].
     """
-    x, xc, n = Y
+    x, xc, n, S = Y
+    n = np.clip(n, 0, 1)  # Ensure n stays within [0, 1]
     
     # Unpack parameters
     tau_x0_p = params[0]
@@ -119,6 +134,9 @@ def scn_model(Y, t, *params):
     alpha_0_p = params[8]
     I_0_p = params[9]
     q_factor_p = params[10]
+    r_w_p = params[11]
+    r_s_p = params[12]
+    S_max_p = params[13]
 
     # Debug print parameters (only once)
     if not hasattr(scn_model, 'params_printed'):
@@ -134,6 +152,9 @@ def scn_model(Y, t, *params):
         print(f"alpha_0: {alpha_0_p}")
         print(f"I_0: {I_0_p}")
         print(f"q_factor: {q_factor_p}")
+        print(f"r_w: {r_w_p}")
+        print(f"r_s: {r_s_p}")
+        print(f"S_max: {S_max_p}")
         scn_model.params_printed = True
 
     # 1. Determine current light intensity L(t)
@@ -153,12 +174,12 @@ def scn_model(Y, t, *params):
         print(f"L_val: {L_val:.2f}")
         print(f"alpha_val: {alpha_val:.6f}")
         print(f"B_t: {B_t:.6f}")
-        print(f"x: {x:.6f}, xc: {xc:.6f}, n: {n:.6f}")
+        print(f"x: {x:.6f}, xc: {xc:.6f}, n: {n:.6f}, S: {S:.6f}")
 
     # 4. SCN Oscillator Equations (Process P)
     # Modified van der Pol term with proper bounds
-    x_clipped = np.clip(x, -3, 3)  # Clip x to reasonable range
-    vdp_term = mu_p * (x_clipped/3 + (4/3)*np.clip(x_clipped**3, -3, 3))
+    x_clipped = np.clip(x, -1, 1)  # Clip x to reasonable range
+    vdp_term = mu_p * (x_clipped/3 + (4/3)*np.clip(x_clipped**3, -2, 2))
     dxdt = (np.pi / tau_x0_p) * (xc + vdp_term + B_t)
     
     # dxc/dt: Dynamics of state variable xc
@@ -173,7 +194,11 @@ def scn_model(Y, t, *params):
     #        beta_n * n represents the decay or recovery of adaptation.
     dndt = lambda_n_p * (alpha_val * (1 - n) - beta_n_p * n)
 
-    return [dxdt, dxc_dt, dndt]
+    # 6. Homeostatic Sleep Drive S(t)
+    A = A_func(t, phase_shift=phase_shift)
+    dSdt = r_w_p * (S_max_p - S) * A - r_s_p * S * (1 - A)
+
+    return [dxdt, dxc_dt, dndt, dSdt]
 
 # --- Simulation Setup ---
 total_days = stabilisation + 3 #15
@@ -185,10 +210,11 @@ t_eval = np.arange(0, total_hours, dt)
 x_init = 0.5    # Increased from 0.1
 xc_init = 0.5   # Increased from 0.1
 n_init = 0.5    # Kept the same
-Y0 = [x_init, xc_init, n_init]
+S_init = 0.5    # Initial value for S
+Y0 = [x_init, xc_init, n_init, S_init]
 
 # Pack parameters for odeint
-model_params = (tau_x0, mu, k_B, lambda_n, beta_n, G, b_x, b_xc, alpha_0_val, I_0, q_factor)
+model_params = (tau_x0, mu, k_B, lambda_n, beta_n, G, b_x, b_xc, alpha_0_val, I_0, q_factor, r_w, r_s, S_max)
 
 # --- Perform Simulation ---
 print(f"Starting simulation for {total_days} days...")
@@ -199,6 +225,7 @@ try:
     print(f"dx/dt: {initial_derivatives[0]:.6f}")
     print(f"dxc/dt: {initial_derivatives[1]:.6f}")
     print(f"dn/dt: {initial_derivatives[2]:.6f}")
+    print(f"dS/dt: {initial_derivatives[3]:.6f}")
     
     # Use LSODA solver with more conservative parameters
     from scipy.integrate import solve_ivp
@@ -242,7 +269,9 @@ if np.allclose(solution, 0, atol=1e-10):
 
 x_sol = solution[:, 0]
 xc_sol = solution[:, 1]
-n_sol = solution[:, 2] # n is not directly plotted but is part of the system
+n_sol = solution[:, 2]
+S_sol = solution[:, 3]
+SP_sol = S_sol - xc_sol
 
 # --- Derive SCN Internal Phase (theta) ---
 # theta(t) = atan2(xc(t), x(t))
@@ -275,12 +304,21 @@ try:
     plt.savefig('scn_phase_space.png')
     plt.close()
     
+    # Helper for correct top axis: get time-of-day for each point
+    time_of_day_hours = t_eval[post_stab_indices] % 24
+    def hour_min_formatter(x, pos):
+        # x is an index into the plotted data
+        idx = int(np.clip(round(x), 0, len(time_of_day_hours)-1))
+        hours = int(time_of_day_hours[idx])
+        minutes = int((time_of_day_hours[idx] % 1) * 60)
+        return f"{hours:02d}:{minutes:02d}"
+    
     # 2. SCN Internal Phase (theta) over Time (simulation period only)
     plt.figure(figsize=(12, 10))
-    
     # 2a. Wrapped Phase Plot (top)
+    xvals_days = t_eval[post_stab_indices] / 24.0
     plt.subplot(2, 1, 1)
-    plt.plot(t_eval[post_stab_indices] / 24.0, theta_t_raw[post_stab_indices], color='red')
+    plt.plot(xvals_days, theta_t_raw[post_stab_indices], color='red')
     plt.xlabel('Time (days)', fontsize=12)
     plt.ylabel('SCN Internal Phase $\\theta(t)$ (radians)', fontsize=12)
     plt.title(f'Wrapped SCN Internal Phase (After {stabilisation} Days Stabilization)', fontsize=14)
@@ -288,73 +326,83 @@ try:
     plt.axhline(y=np.pi, color='gray', linestyle='--', alpha=0.5)
     plt.axhline(y=-np.pi, color='gray', linestyle='--', alpha=0.5)
     plt.ylim(-np.pi-0.1, np.pi+0.1)
-    
     # Add secondary x-axis with 24-hour clock format
     ax2 = plt.gca().twiny()
     ax2.set_xlim(plt.gca().get_xlim())
-    ax2.xaxis.set_major_formatter(plt.FuncFormatter(format_time_label))
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
     ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
-    ax2.xaxis.set_major_locator(plt.MultipleLocator(1/24))  # Show every hour
-    
     # 2b. Unwrapped Phase Plot (bottom)
     plt.subplot(2, 1, 2)
-    plt.plot(t_eval[post_stab_indices] / 24.0, theta_t_unwrapped[post_stab_indices], color='green')
+    plt.plot(xvals_days, theta_t_unwrapped[post_stab_indices], color='green')
     plt.xlabel('Time (days)', fontsize=12)
     plt.ylabel('Unwrapped SCN Internal Phase $\\theta(t)$ (radians)', fontsize=12)
     plt.title(f'Unwrapped SCN Internal Phase (After {stabilisation} Days Stabilization)', fontsize=14)
     plt.grid(True, linestyle=':', alpha=0.7)
-    
-    # Add secondary x-axis with 24-hour clock format
     ax2 = plt.gca().twiny()
     ax2.set_xlim(plt.gca().get_xlim())
-    ax2.xaxis.set_major_formatter(plt.FuncFormatter(format_time_label))
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
     ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
-    ax2.xaxis.set_major_locator(plt.MultipleLocator(1/24))  # Show every hour
-    
     plt.tight_layout()
     plt.savefig('scn_phase_comparison.png')
     plt.close()
-    
     # 3. Optional: Plot Light Schedule (simulation period only)
     L_values_over_time = np.array([light_schedule(t_val) for t_val in t_eval])
-
     plt.figure(figsize=(12, 4))
-    plt.plot(t_eval[post_stab_indices] / 24.0, L_values_over_time[post_stab_indices], color='orange')
+    plt.plot(xvals_days, L_values_over_time[post_stab_indices], color='orange')
     plt.xlabel('Time (days)', fontsize=12)
     plt.ylabel('Light Intensity $L(t)$ (lux)', fontsize=12)
     plt.title(f'Environmental Light Schedule (After {stabilisation} Days Stabilization)', fontsize=14)
     plt.grid(True, linestyle=':', alpha=0.7)
     plt.yscale('log')
     plt.ylim(bottom=1)
-    
-    # Add secondary x-axis with 24-hour clock format
     ax2 = plt.gca().twiny()
     ax2.set_xlim(plt.gca().get_xlim())
-    ax2.xaxis.set_major_formatter(plt.FuncFormatter(format_time_label))
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
     ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
-    ax2.xaxis.set_major_locator(plt.MultipleLocator(1/24))  # Show every hour
-    
     plt.tight_layout()
     plt.savefig('scn_light_schedule.png')
     plt.close()
-    
     # 4. Plot xc over time
     plt.figure(figsize=(12, 4))
-    plt.plot(t_eval[post_stab_indices] / 24.0, xc_sol[post_stab_indices], color='purple')
+    plt.plot(xvals_days, xc_sol[post_stab_indices], color='purple')
     plt.xlabel('Time (days)', fontsize=12)
     plt.ylabel('SCN State Variable $x_c$', fontsize=12)
     plt.title(f'SCN State Variable $x_c$ Over Time (After {stabilisation} Days Stabilization)', fontsize=14)
     plt.grid(True, linestyle=':', alpha=0.7)
-    
-    # Add secondary x-axis with 24-hour clock format
     ax2 = plt.gca().twiny()
     ax2.set_xlim(plt.gca().get_xlim())
-    ax2.xaxis.set_major_formatter(plt.FuncFormatter(format_time_label))
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
     ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
-    ax2.xaxis.set_major_locator(plt.MultipleLocator(1/24))  # Show every hour
-    
     plt.tight_layout()
     plt.savefig('scn_xc_time.png')
+    plt.close()
+    # 5. Plot SP(t) = S(t) - xc(t) over time
+    plt.figure(figsize=(12, 4))
+    plt.plot(xvals_days, SP_sol[post_stab_indices], color='teal')
+    plt.xlabel('Time (days)', fontsize=12)
+    plt.ylabel('SP(t) = S(t) - $x_c$', fontsize=12)
+    plt.title(f'SP(t) Over Time (After {stabilisation} Days Stabilization)', fontsize=14)
+    plt.grid(True, linestyle=':', alpha=0.7)
+    ax2 = plt.gca().twiny()
+    ax2.set_xlim(plt.gca().get_xlim())
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
+    ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
+    plt.tight_layout()
+    plt.savefig('scn_sp_time.png')
+    plt.close()
+    # 6. Plot S(t) over time
+    plt.figure(figsize=(12, 4))
+    plt.plot(xvals_days, S_sol[post_stab_indices], color='darkorange')
+    plt.xlabel('Time (days)', fontsize=12)
+    plt.ylabel('S(t)', fontsize=12)
+    plt.title(f'S(t) Over Time (After {stabilisation} Days Stabilization)', fontsize=14)
+    plt.grid(True, linestyle=':', alpha=0.7)
+    ax2 = plt.gca().twiny()
+    ax2.set_xlim(plt.gca().get_xlim())
+    ax2.xaxis.set_major_formatter(plt.FuncFormatter(hour_min_formatter))
+    ax2.set_xlabel('Time of Day (HH:MM)', fontsize=12)
+    plt.tight_layout()
+    plt.savefig('scn_S_time.png')
     plt.close()
     
     print("\nPlots have been saved as:")
@@ -362,6 +410,8 @@ try:
     print("2. scn_phase_comparison.png (shows both wrapped and unwrapped phase)")
     print("3. scn_light_schedule.png")
     print("4. scn_xc_time.png")
+    print("5. scn_sp_time.png")
+    print("6. scn_S_time.png")
     print(f"\nNote: All plots show {total_days - stabilisation} days of simulation data after {stabilisation} days of stabilization")
     print("      All time-based plots include 24-hour clock format on top axis")
     
@@ -373,8 +423,8 @@ print("\nScript finished. Check the saved plot files.")
 
 # Add debug printing for key variables
 print("\nDebug Values (showing every 24 hours after stabilization):")
-print("Time (hrs) | x_sol | xc_sol | theta_raw")
-print("-" * 50)
+print("Time (hrs) | x_sol | xc_sol | theta_raw | S_sol | SP_sol")
+print("-" * 70)
 
 # Calculate indices for post-stabilization period
 stabilization_hours = stabilisation * 24
@@ -383,10 +433,12 @@ post_stab_indices = (t_eval >= stabilization_hours) & (t_eval < total_days * 24)
 # Print values every 24 hours
 for i in range(len(t_eval)):
     if post_stab_indices[i] and i % 2400 == 0:  # 2400 = 24 hours * 100 (since dt = 0.01)
-        print(f"{t_eval[i]:8.2f} | {x_sol[i]:6.3f} | {xc_sol[i]:6.3f} | {theta_t_raw[i]:6.3f}")
+        print(f"{t_eval[i]:8.2f} | {x_sol[i]:6.3f} | {xc_sol[i]:6.3f} | {theta_t_raw[i]:6.3f} | {S_sol[i]:6.3f} | {SP_sol[i]:6.3f}")
 
 # Print final values
 print("\nFinal Values:")
 print(f"Final x_sol: {x_sol[-1]:.6f}")
 print(f"Final xc_sol: {xc_sol[-1]:.6f}")
 print(f"Final theta_raw: {theta_t_raw[-1]:.6f}")
+print(f"Final S_sol: {S_sol[-1]:.6f}")
+print(f"Final SP_sol: {SP_sol[-1]:.6f}")
