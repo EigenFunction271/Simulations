@@ -25,8 +25,8 @@ stabilisation = 10
 # Parameters for S(t) homeostatic sleep drive
 r_w = 0.2      # Rate constant for increase of S during wake
 r_s = 0.3      # Rate constant for decrease of S during sleep
-S_max = 15.0    # Maximum value of S
-S_init = S_max / 2  # Start at midpoint, for example
+S_max = 1.0    # Maximum value of S (changed from 15.0 to 1.0)
+S_init = S_max / 2  # Start at midpoint
 
 # --- Helper Functions ---
 
@@ -271,7 +271,11 @@ x_sol = solution[:, 0]
 xc_sol = solution[:, 1]
 n_sol = solution[:, 2]
 S_sol = solution[:, 3]
-SP_sol = S_sol - xc_sol
+
+# Re-scale x_c to amplitude 1 before calculating SP
+xc_max = np.max(np.abs(xc_sol))
+xc_sol_scaled = xc_sol / xc_max
+SP_sol = S_sol - xc_sol_scaled
 
 # --- Derive SCN Internal Phase (theta) ---
 # theta(t) = atan2(xc(t), x(t))
